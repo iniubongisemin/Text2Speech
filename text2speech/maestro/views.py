@@ -57,22 +57,30 @@ class AudioToTextView(APIView):
 
 
 class NotesToSummaryView(APIView):
-    def post(self, request, transcription, meeting_summary, refined_output, *args, **kwargs):
+    def post(self, request, *args, **kwargs):
         transcription = request.data.get('text')
         if not transcription:
-            return Response({'error': 'Transcribed text is required please ensure that your audio is transcribed first'})
+            return Response({'error': 'Transcribed text is required please ensure that your audio is transcribed first'}, status=status.HTTP_400_BAD_REQUEST)
+        
         try:
-            prompt = f"Please provide a detailed summary of the following meeting transcription:\n\n{transcription['text']} in JSON format with the key being 'meeting_summary'"
-            response = gpt_orchestrator(transcription, prompt)
-            if response.status_code == 200:
-                return response.json()
-            
-            meeting_summary = request.data.get('meeting_summary')
-            if not meeting_summary:
-                return Response({'error': 'Meeting summary is required to proceed'})
+            # Generating meeting summary
+            # summary_prompt = f"Please provide a detailed summary of the following meeting transcription:\n\n{transcription['text']} in JSON format with the key being 'meeting_summary'"
+            summary_prompt = f"Please provide a detailed summary of the following meeting transcription:\n\n{transcription} in JSON format with the key being 'meeting_summary'"
+            summary_response = gpt_orchestrator(transcription, summary_prompt)
+            # meeting_summary = summary_response.get('meeting_summary')
 
-            sub_agent = gpt_sub_agent(meeting_summary, prompt)
-            prompt = f"""Based on the following meeting summary, please create a list of action items with their respective timelines:
+            print(f"Summary response: {summary_response}")
+
+            if isinstance(summary_response, str):
+                summary_response = json.loads(summary_response)
+
+            meeting_summary = summary_response.get("meeting_summary")
+
+            if not meeting_summary:
+                return Response({'error': 'Failed to generate meeting summary'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            # Generating action items
+            action_items_prompt = f"""Based on the following meeting summary, please create a list of action items with their respective timelines:
 
             {meeting_summary}
 
@@ -87,72 +95,37 @@ class NotesToSummaryView(APIView):
                 ]
             }}
             """
-            response = sub_agent
+            action_items_response = gpt_sub_agent(meeting_summary, action_items_prompt)
 
-            if response.status_code == 200:
-                return response.json
-        finally:
-            prompt = "Further refine and optimize the action_items initially obtained and return a final output"
-            refined_output = request.data.get('action_items')
-            if not refined_output:
-                return Response({'error': 'Refined Final Output is required'})
-            refiner = openai_refine(refined_output, prompt)
+            print(f"Action items response: {action_items_response}")
             
-            response = refiner
-            if response.status_code == 200:
-                return response.json
+            if isinstance(action_items_response, str):
+                action_items_response = json.loads(action_items_response)
 
+            action_items = action_items_response.get('action_items')
 
+            if not action_items:
+                return Response({'error': 'Failed to generate action items'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            # Refining and further optimizing action items
+            refine_prompt = f"Further refine and optimize the action_items initially obtained and return a final output"
+            refined_output = openai_refine(action_items, refine_prompt)
 
+            print(f"Refined output: {refined_output}")
 
+            if isinstance(refined_output, str):
+                refined_output = json.loads(refined_output)
 
+            # Preparing the final response
+            final_response = {
+                'meeting_summary': meeting_summary,
+                'action_items': action_items,
+                'refined_output': refined_output,
+            }
 
-
-    # def generate_meeting_summary(transcription):
-        # client = OpenAI(api_key=settings.OPENAI_API_KEY)
-        # prompt = f"Please provide a detailed summary of the following meeting transcription:\n\n{transcription['text']}"
-
-        # response = gpt_orchestrator(transcription, prompt)
-        # response = client.chat.completions.create(
-        #     model="gpt-4o",
-        #     messages=[
-        #         {"role": "system", "content": "You are an AI assistant that summarizes meeting transcriptions."},
-        #         {"role": "user", "content": prompt}
-        #     ],
-        #     max_tokens=1000
-        # )
-
-        # return response.choices[0].message.content
-        # if response.status_code == 200:
-        #     return response.json()
-
-    # def create_action_items(meeting_summary):
-        # client = OpenAI(api_key=settings.OPENAI_API_KEY)
-        # prompt = f"""Based on the following meeting summary, please create a list of action items with their respective timelines:
-
-        # {meeting_summary}
-
-        # Format the output as a JSON object with the following structure:
-        # {{
-        #     "action_items": [
-        #         {{
-        #             "task": "Task description",
-        #             "assignee": "Person responsible",
-        #             "deadline": "YYYY-MM-DD"
-        #         }}
-        #     ]
-        # }}
-        # """
-        # response = gpt_sub_agent(meeting_summary, prompt)
-        # response = client.chat.completions.create(
-        #     model="gpt-4o",
-        #     messages=[
-        #         {"role": "system", "content": "You are an AI assistant that extracts action items from meeting summaries."},
-        #         {"role": "user", "content": prompt}
-        #     ],
-        #     max_tokens=1000
-        # )
-        # return json.loads(response.choices[0].message.content)
-
-        # if response.status_code == 200:
-        #     return json.loads(response.choices[0].message.content)
+            return Response(final_response, status=status.HTTP_200_OK)
+        except Exception as e:
+            import traceback
+            print(f"Error: {str(e)}")
+            print(traceback.format_exc())
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
