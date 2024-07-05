@@ -56,12 +56,63 @@ class AudioToTextView(APIView):
             raise Exception(f"Error in API call: {response.status_code} - {response.text}")
 
 
-class NotesToSummary(APIView):
-    def generate_meeting_summary(transcription):
-        # client = OpenAI(api_key=settings.OPENAI_API_KEY)
-        prompt = f"Please provide a detailed summary of the following meeting transcription:\n\n{transcription['text']}"
+class NotesToSummaryView(APIView):
+    def post(self, request, transcription, meeting_summary, refined_output, *args, **kwargs):
+        transcription = request.data.get('text')
+        if not transcription:
+            return Response({'error': 'Transcribed text is required please ensure that your audio is transcribed first'})
+        try:
+            prompt = f"Please provide a detailed summary of the following meeting transcription:\n\n{transcription['text']} in JSON format with the key being 'meeting_summary'"
+            response = gpt_orchestrator(transcription, prompt)
+            if response.status_code == 200:
+                return response.json()
+            
+            meeting_summary = request.data.get('meeting_summary')
+            if not meeting_summary:
+                return Response({'error': 'Meeting summary is required to proceed'})
 
-        response = gpt_orchestrator(transcription, prompt)
+            sub_agent = gpt_sub_agent(meeting_summary, prompt)
+            prompt = f"""Based on the following meeting summary, please create a list of action items with their respective timelines:
+
+            {meeting_summary}
+
+            Format the output as a JSON object with the following structure:
+            {{
+                "action_items": [
+                    {{
+                        "task": "Task description",
+                        "assignee": "Person responsible",
+                        "deadline": "YYYY-MM-DD"
+                    }}
+                ]
+            }}
+            """
+            response = sub_agent
+
+            if response.status_code == 200:
+                return response.json
+        finally:
+            prompt = "Further refine and optimize the action_items initially obtained and return a final output"
+            refined_output = request.data.get('action_items')
+            if not refined_output:
+                return Response({'error': 'Refined Final Output is required'})
+            refiner = openai_refine(refined_output, prompt)
+            
+            response = refiner
+            if response.status_code == 200:
+                return response.json
+
+
+
+
+
+
+
+    # def generate_meeting_summary(transcription):
+        # client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        # prompt = f"Please provide a detailed summary of the following meeting transcription:\n\n{transcription['text']}"
+
+        # response = gpt_orchestrator(transcription, prompt)
         # response = client.chat.completions.create(
         #     model="gpt-4o",
         #     messages=[
@@ -72,27 +123,27 @@ class NotesToSummary(APIView):
         # )
 
         # return response.choices[0].message.content
-        if response.status_code == 200:
-            return response.json()
+        # if response.status_code == 200:
+        #     return response.json()
 
-    def create_action_items(meeting_summary):
+    # def create_action_items(meeting_summary):
         # client = OpenAI(api_key=settings.OPENAI_API_KEY)
-        prompt = f"""Based on the following meeting summary, please create a list of action items with their respective timelines:
+        # prompt = f"""Based on the following meeting summary, please create a list of action items with their respective timelines:
 
-        {meeting_summary}
+        # {meeting_summary}
 
-        Format the output as a JSON object with the following structure:
-        {{
-            "action_items": [
-                {{
-                    "task": "Task description",
-                    "assignee": "Person responsible",
-                    "deadline": "YYYY-MM-DD"
-                }}
-            ]
-        }}
-        """
-        response = gpt_sub_agent(meeting_summary, prompt)
+        # Format the output as a JSON object with the following structure:
+        # {{
+        #     "action_items": [
+        #         {{
+        #             "task": "Task description",
+        #             "assignee": "Person responsible",
+        #             "deadline": "YYYY-MM-DD"
+        #         }}
+        #     ]
+        # }}
+        # """
+        # response = gpt_sub_agent(meeting_summary, prompt)
         # response = client.chat.completions.create(
         #     model="gpt-4o",
         #     messages=[
@@ -103,5 +154,5 @@ class NotesToSummary(APIView):
         # )
         # return json.loads(response.choices[0].message.content)
 
-        if response.status_code == 200:
-            return json.loads(response.choices[0].message.content)
+        # if response.status_code == 200:
+        #     return json.loads(response.choices[0].message.content)

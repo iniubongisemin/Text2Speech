@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 from rich.console import Console
 from rich.panel import Panel
@@ -9,6 +10,7 @@ from openai import OpenAI
 # import anthropic
 # from anthropic import Anthropic
 from tavily import TavilyClient
+import requests
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -20,6 +22,7 @@ openai_client = OpenAI()
 # Available OpenAI models
 ORCHESTRATOR_MODEL = "gpt-4o"
 SUB_AGENT_MODEL = "ollama/deepseek-coder-v2"
+# SUB_AGENT_MODEL = "gpt-4o"
 
 # Available Claude models for Anthropic API
 REFINER_MODEL = "gpt-4o"
@@ -281,20 +284,31 @@ with open(filename, 'w') as file:
     file.write(exchange_log)
 print(f"\nFull exchange log saved to {filename}")
 
-import requests
 
-def call_audio_to_text_api(audio_file_path):
-    api_url = 'http://your_django_server/api/audio-to-text/'
-    with open(audio_file_path, 'rb') as file:
-        response = requests.post(api_url, files={'file': file})
+
+# def call_audio_to_text_api(audio_file_path):
+#     api_url = 'http://your_django_server/api/audio-to-text/'
+#     with open(audio_file_path, 'rb') as file:
+#         response = requests.post(api_url, files={'file': file})
     
-    if response.status_code == 200:
-        return response.json()
-    else:
-        return {"error": "API call failed"}
+#     if response.status_code == 200:
+#         return response.json()
+#     else:
+#         return {"error": "API call failed"}
 
-# Example usage
-audio_file_path = 'path_to_your_audio_file'
-text_output = call_audio_to_text_api(audio_file_path)
-print(text_output)
+# # Example usage
+# audio_file_path = 'path_to_your_audio_file'
+# text_output = call_audio_to_text_api(audio_file_path)
+# print(text_output)
 
+if __name__ == "__main__":
+    if "runserver" and "migrate" and "makemigrations" not in sys.argv:
+        gpt_orchestrator()
+        gpt_sub_agent()
+        openai_refine()
+        calculate_openai_cost()
+        create_folder_structure()
+        create_folders_and_files()
+        read_file()
+        # call_audio_to_text_api()
+    
