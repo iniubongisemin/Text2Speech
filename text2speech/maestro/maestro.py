@@ -1,43 +1,67 @@
 import os
 import sys
 import re
+import json
 from rich.console import Console
 from rich.panel import Panel
 from datetime import datetime
 import json
 from litellm import completion
 from openai import OpenAI, OpenAIError
-# import anthropic
-# from anthropic import Anthropic
 from tavily import TavilyClient
 import requests
 from dotenv import load_dotenv
 load_dotenv()
 
+
 # Initialize OpenAI and Anthropic API clients
-os.environ["OPENAI_API_KEY"] = "YOUR OPENAI API KEY"
 OpenAI.api_key = os.environ.get("OPENAI_API_KEY")
 openai_client = OpenAI()
 
 # Available OpenAI models
-ORCHESTRATOR_MODEL = "gpt-4o"
+# ORCHESTRATOR_MODEL = "gpt-4o"
+ORCHESTRATOR_MODEL = "ollama/gemma2"
+
 # SUB_AGENT_MODEL = "ollama/deepseek-coder-v2"
-SUB_AGENT_MODEL = "gpt-4o"
+SUB_AGENT_MODEL = "ollama/gemma2"
 
 # Available Claude models for Anthropic API
-REFINER_MODEL = "gpt-4o"
+REFINER_MODEL = "ollama/gemma2"
 
 # Initialize the Rich Console
 console = Console()
 
-def gpt_orchestrator(objective, file_content=None, previous_results=None, use_search=False):
+
+def clean_and_validate_json(response_text):
+    # Attempt to remove any leading/trailing whitespace
+    cleaned_text = response_text.strip()
+    
+    # Remove any potential markdown code block syntax
+    cleaned_text = re.sub(r'^#```json\s*|\s*```#$', '', cleaned_text, flags=re.MULTILINE)
+    
+    # Attempt to find a valid JSON object within the text
+    json_match = re.search(r'\{.*\}', cleaned_text, re.DOTALL)
+    if json_match:
+        cleaned_text = json_match.group(0)
+    
+    try:
+        # Attempt to parse the cleaned text as JSON
+        json_object = json.loads(cleaned_text)
+        return json_object
+    except json.JSONDecodeError:
+        # If parsing fails, return a dictionary with the raw response
+        # return {"error": "Failed to parse JSON response", "raw_response": cleaned_text}
+        return cleaned_text
+
+def gpt_orchestrator(prompt, objective, file_content=None, previous_results=None, use_search=False):
     console.print(f"\n[bold]Calling Orchestrator for your objective[/bold]")
     previous_results_text = "\n".join(previous_results) if previous_results else "None"
     if file_content:
         console.print(Panel(f"File content:\n{file_content}", title="[bold blue]File Content[/bold blue]", title_align="left", border_style="blue"))
     
     messages = [
-        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "system", "content": "You are a comprehensive and analytical assistant specializing in task decomposition and information extraction. Your primary function is to dissect intricate goals into actionable sub-tasks, providing clear justifications for each step. Throughout the process, you will transparently explain your reasoning step-by-step. Additionally, you can identify and suggest grammatical improvements, potential enhancements, and ensure adherence to best writing practices."},
+        # {"role": "system", "content": "You are a detailed and meticulous assistant. Your primary goal is to break down complex objectives into manageable sub-tasks, provide thorough reasoning, and ensure code correctness in cases where code generation is required. Always explain your thought process step-by-step. Where applicable, validate any code for errors, improvements, and adherence to best practices."},
         # {"role": "user", "content": f"Based on the following objective{' and file content' if file_content else ''}, and the previous sub-task results (if any), please break down the objective into the next sub-task, and create a concise and detailed prompt for a subagent so it can execute that task. IMPORTANT!!! when dealing with code tasks make sure you check the code for errors and provide fixes and support as part of the next sub-task. If you find any bugs or have suggestions for better code, please include them in the next sub-task prompt. Please assess if the objective has been fully achieved. If the previous sub-task results comprehensively address all aspects of the objective, include the phrase 'The task is complete:' at the beginning of your response. If the objective is not yet fully achieved, break it down into the next sub-task and create a concise and detailed prompt for a subagent to execute that task.:\n\nObjective: {objective}" + ('\nFile content:\n' + file_content if file_content else '') + f"\n\nPrevious sub-task results:\n{previous_results_text}"}
         {"role": "user", "content": f"Objective: {objective}\n\nPrompt: {prompt}\n\nPrevious sub-task results:\nPrevious sub-task results:\n{previous_results_text}"}
     ]
@@ -45,53 +69,33 @@ def gpt_orchestrator(objective, file_content=None, previous_results=None, use_se
     # if use_search:
     #     messages.append({"role": "user", "content": "Please also generate a JSON object containing a single 'search_query' key, which represents a question that, when asked online, would yield important information for solving the subtask. The question should be specific and targeted to elicit the most relevant and helpful resources. Format your JSON like this, with no additional text before or after:\n{\"search_query\": \"<question>\"}\n"})
 
+    response = completion(model=ORCHESTRATOR_MODEL, messages=messages)
+
+    response_text = response['choices'][0]['message']['content']
+
     if file_content:
         messages[1]["content"] += f"\n\nFile content\n{file_content}"
+        
 
-    gpt_response = openai_client.chat.completions.create(
-        model=ORCHESTRATOR_MODEL,
-        messages=messages,
-        max_tokens=4096
-    )
 
-    response_text = gpt_response.choices[0].message.content
-    # usage = gpt_response.usage
-
-    try:
-        response_json = json.loads(response_text)
-    except json.JSONDecodeError:
-        response_json = {"error": "Failed to parse JSON response", "raw_response": response_text}
+    # try:
+    #     response_json = json.loads(response_text)
+    # except json.JSONDecodeError:
+    #     response_json = {"error": "Failed to parse JSON response", "raw_response": response_text}
+        # response_json = response_json.strip('"error": "Failed to parse JSON response", "raw_response":')
     
-    return response_json
+    # return response_json
+    return clean_and_validate_json(response_text)
 
-    # console.print(Panel(response_text, title=f"[bold green]gpt Orchestrator[/bold green]", title_align="left", border_style="green", subtitle="Sending task to gpt 👇"))
-    # console.print(f"Input Tokens: {usage.prompt_tokens}, Output Tokens: {usage.completion_tokens}, Total Tokens: {usage.total_tokens}")
-
-    # search_query = None
-    # if use_search:
-    #     json_match = re.search(r'{.*}', response_text, re.DOTALL)
-    #     if json_match:
-    #         json_string = json_match.group()
-    #         try:
-    #             search_query = json.loads(json_string)["search_query"]
-    #             console.print(Panel(f"Search Query: {search_query}", title="[bold blue]Search Query[/bold blue]", title_align="left", border_style="blue"))
-    #             response_text = response_text.replace(json_string, "").strip()
-    #         except json.JSONDecodeError as e:
-    #             console.print(Panel(f"Error parsing JSON: {e}", title="[bold red]JSON Parsing Error[/bold red]", title_align="left", border_style="red"))
-    #             console.print(Panel(f"Skipping search query extraction.", title="[bold yellow]Search Query Extraction Skipped[/bold yellow]", title_align="left", border_style="yellow"))
-    #     else:
-    #         search_query = None
-
-    # return response_text, file_content, search_query
-
+    
 # def gpt_sub_agent(prompt, search_query=None, previous_gpt_tasks=None, use_search=False, continuation=False):
-def gpt_sub_agent(prompt, search_query=None, previous_gpt_tasks=None, use_search=False):
+def gpt_sub_agent(prompt, search_query=None, previous_gpt_tasks=None, use_search=False, continuation=False):
     if previous_gpt_tasks is None:
         previous_gpt_tasks = []
 
     # continuation_prompt = "Continuing from the previous answer, please complete the response."
-    system_message = "Previous gpt tasks:\n" + "\n".join(f"Task: {task['task']}\nResult: {task['result']}" for task in previous_gpt_tasks)
-
+    system_message = "Drawing from the previous GPT tasks, you excel at textual analysis and can generate informative summaries that capture the conversation's flow, speaker intent, and identify individual speakers. When multiple speakers are present, You must assign speaker tags for clarity. Previous gpt tasks:\n" + "\n".join(f"Task: {task['task']}\nResult: {task['result']}" for task in previous_gpt_tasks)
+    
     messages = [
         {"role": "system", "content": system_message},
         {"role": "user", "content": prompt}
@@ -102,7 +106,7 @@ def gpt_sub_agent(prompt, search_query=None, previous_gpt_tasks=None, use_search
     # qna_response = None
     if search_query and use_search:
         # tavily = TavilyClient(api_key="YOUR_API_KEY")
-        tavily = TavilyClient(api_key=os.environ.get("OPENAI_API_KEY"))
+        tavily = TavilyClient(api_key=os.environ.get("TAVILY_CLIENT_API_KEY"))
         qna_response = tavily.qna_search(query=search_query)
         # console.print(f"QnA response: {qna_response}", style="yellow")
         messages.append({"role": "user", "content": f"\nSearch Results:\n{qna_response}"})
@@ -111,95 +115,38 @@ def gpt_sub_agent(prompt, search_query=None, previous_gpt_tasks=None, use_search
 
     response_text = response['choices'][0]['message']['content']
 
-    try:
-        response_json = json.loads(response_text)
-    except json.JSONDecodeError:
-        response_json = {"error": "Failed to parse JSON response", "raw_response": response_text}
+    # try:
+    #     response_json = json.loads(response_text)
+    # except json.JSONDecodeError:
+    #     response_json = {"error": "Failed to parse JSON response", "raw_response": response_text}
+        # response_json = response_json.strip('"error": "Failed to parse JSON response", "raw_response":')
 
-    return response_json
-
-    # messages = [
-    #     {"role": "system", "content": system_message},
-    #     {"role": "user", "content": prompt}
-    # ]
-
-    # if qna_response:
-    #     messages.append({"role": "user", "content": f"\nSearch Results:\n{qna_response}"})
-
-    # response = completion(model=SUB_AGENT_MODEL, messages=messages)
-
-    # # response_text = gpt_response.choices[0].message.content
-    # response_text = response['choices'][0]['message']['content']
-    # # usage = gpt_response.usage
-
-    # console.print(Panel(response_text, title="[bold blue]gpt Sub-agent Result[/bold blue]", title_align="left", border_style="blue", subtitle="Task completed, sending result to gpt 👇"))
-
-    # if len(response_text) >= 4000:  # Threshold set to 4000 as a precaution
-    #     console.print("[bold yellow]Warning:[/bold yellow] Output may be truncated. Attempting to continue the response.")
-    #     continuation_response_text = gpt_sub_agent(prompt, search_query, previous_gpt_tasks, use_search, continuation=True)
-    #     response_text += continuation_response_text
-
-    # return response_text
+    # return response_json
+    return clean_and_validate_json(response_text)
 
 
-# def openai_refine(objective, sub_task_results, filename, projectname, continuation=False):
-def openai_refine(input_data, prompt, filename=None, projectname=None):
-    console.print("\nCalling GPT-4o to provide the refined final output for your objective:")
+
+# def gpt_refiner(objective, sub_task_results, filename, projectname, continuation=False):
+def gpt_refiner(input_data, prompt, filename=None, projectname=None):
+    console.print("\nCalling the refiner LLM to provide the refined final output for your objective:")
     
     messages = [
         {"role": "system", "content": "You are a helpful AI assistant that refines and combines sub-task results into a cohesive final output."},
-        # {"role": "user", "content": f"Objective: {objective}\n\nSub-task results:\n{'\n'.join(sub_task_results)}\n\nPlease review and refine the sub-task results into a cohesive final output. Add any missing information or details as needed. When working on code projects, ONLY AND ONLY IF THE PROJECT IS CLEARLY A CODING ONE please provide the following:\n1. Project Name: Create a concise and appropriate project name that fits the project based on what it's creating. The project name should be no more than 20 characters long.\n2. Folder Structure: Provide the folder structure as a valid JSON object, where each key represents a folder or file, and nested keys represent subfolders. Use null values for files. Ensure the JSON is properly formatted without any syntax errors. Please make sure all keys are enclosed in double quotes, and ensure objects are correctly encapsulated with braces, separating items with commas as necessary.\nWrap the JSON object in <folder_structure> tags.\n3. Code Files: For each code file, include ONLY the file name NEVER EVER USE THE FILE PATH OR ANY OTHER FORMATTING YOU ONLY USE THE FOLLOWING format 'Filename: <filename>' followed by the code block enclosed in triple backticks, with the language identifier after the opening backticks."}
+        # {"role": "user", "content": f"Objective: {objective}\n\nSub-task results:\n{'\n'.join(sub_task_results)}\n\nPlease review and refine the sub-task results into a cohesive final output. Add any missing information or details as needed. When working on code projects, ONLY AND ONLY IF THE PROJECT IS CLEARLY A CODING ONE please provide the following:\n1. Project Name: Create a concise and appropriate project name that fits the project based on what it's creating. The project name should be no more than 20 characters long.\n2. Folder Structure: Provide the folder structure as a valid JSON object, where each key represents a folder or file, and nested keys represent subfolders. Use null values for files. Ensure the JSON is properly formatted without any syntax errors. Please make sure all keys are enclosed in double quotes, and ensure objects are correctly encapsulated with braces, separating items with commas as necessary.\nWrap the JSON object in <folder_structure> tags.\n3. Code Files: For each code file, include ONLY the file name NEVER EVER USE THE FILE PATH OR ANY OTHER FORMATTING YOU ONLY USE THE FOLLOWING format 'Filename: <filename>' followed by the code block enclosed in triple backticks, with the language identifier after the opening backticks."},
         {"role": "user", "content": f"Input data: {json.dumps(input_data)}\n\nPrompt: {prompt}"}
     ]
 
-    try:
-        response = openai_client.chat.completions.create(
-            model="gpt-4o",  # Make sure to use the correct model name for GPT-4
-            messages=messages,
-            max_tokens=4096
-        )
 
-        response_text = response.choices[0].message.content.strip()
-
-        try:
-            response_json = json.loads(response_text)
-        except json.JSONDecodeError:
-            response_json = {"error": "Failed to parse JSON response", "raw_response": response_text}
-
-        return response_json
-    except OpenAI.OpenAIError as e:
-        console.print(f"[bold red]Error: [/bold red] {str(e)}")
-        return {"error": str(e)}
+    response = completion(model=REFINER_MODEL, messages=messages)
+    response_text = response.choices[0].message.content.strip()
+    # try:
+    #     response_json = json.loads(response_text)
+    # except json.JSONDecodeError:
+    #     response_json = {"error": "Failed to parse JSON response", "raw_response": response_text}
+        # response_json = response_json.strip('"error": "Failed to parse JSON response", "raw_response":')
+    # return response_json
+    return clean_and_validate_json(response_text)
     
-        # response_text = response.choices[0].message.content.strip()
-        # console.print(f"Input Tokens: {response.usage.prompt_tokens}, Output Tokens: {response.usage.completion_tokens}")
-        # total_cost = calculate_openai_cost("gpt-4o", response.usage.prompt_tokens, response.usage.completion_tokens)
-        # console.print(f"Refine Cost: ${total_cost:.4f}")
-
-        # if response.usage.completion_tokens >= 4000 and not continuation:
-        #     console.print("[bold yellow]Warning:[/bold yellow] Output may be truncated. Attempting to continue the response.")
-        #     continuation_response_text = openai_refine(objective, sub_task_results + [response_text], filename, projectname, continuation=True)
-        #     response_text += "\n" + continuation_response_text
-
-        # console.print(Panel(response_text, title="[bold green]Final Output[/bold green]", title_align="left", border_style="green"))
-        # return response_text
-
-    # except OpenAI.OpenAIError as e:
-    #     console.print(f"[bold red]Error:[/bold red] {str(e)}")
-    #     return None
-
-def calculate_openai_cost(model, prompt_tokens, completion_tokens):
-    if model == "gpt-4o":
-        prompt_cost = 0.03 / 1000  # $0.03 per 1K tokens for prompt
-        completion_cost = 0.06 / 1000  # $0.06 per 1K tokens for completion
-    else:
-        # Default to GPT-3.5 pricing if model is not specified
-        prompt_cost = 0.0015 / 1000
-        completion_cost = 0.002 / 1000
-    
-    total_cost = (prompt_tokens * prompt_cost) + (completion_tokens * completion_cost)
-    return total_cost
-
 
 def create_folder_structure(project_name, folder_structure, code_blocks):
     try:
@@ -288,7 +235,7 @@ if __name__ == "__main__":
     sanitized_objective = re.sub(r'\W+', '_', objective)
     timestamp = datetime.now().strftime("%H-%M-%S")
     # refined_output = anthropic_refine(objective, [result for _, result in task_exchanges], timestamp, sanitized_objective)
-    refined_output = openai_refine(objective, [result for _, result in task_exchanges], timestamp, sanitized_objective)
+    refined_output = gpt_refiner(objective, [result for _, result in task_exchanges], timestamp, sanitized_objective)
     
     project_name_match = re.search(r'Project Name: (.*)', refined_output)
     project_name = project_name_match.group(1).strip() if project_name_match else sanitized_objective
@@ -327,31 +274,3 @@ if __name__ == "__main__":
     with open(filename, 'w') as file:
         file.write(exchange_log)
     print(f"\nFull exchange log saved to {filename}")
-    
-    
-    
-    # def call_audio_to_text_api(audio_file_path):
-    #     api_url = 'http://your_django_server/api/audio-to-text/'
-    #     with open(audio_file_path, 'rb') as file:
-    #         response = requests.post(api_url, files={'file': file})
-        
-    #     if response.status_code == 200:
-    #         return response.json()
-    #     else:
-    #         return {"error": "API call failed"}
-    
-    # # Example usage
-    # audio_file_path = 'path_to_your_audio_file'
-    # text_output = call_audio_to_text_api(audio_file_path)
-    # print(text_output)
-    
-        # if "runserver" and "migrate" and "makemigrations" not in sys.argv:
-        #     gpt_orchestrator()
-        #     gpt_sub_agent()
-        #     openai_refine()
-        #     calculate_openai_cost()
-        #     create_folder_structure()
-        #     create_folders_and_files()
-        #     read_file()
-            # call_audio_to_text_api()
-        
